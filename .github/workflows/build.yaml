@@ -16,29 +16,33 @@ jobs:
           git clone https://github.com/xpirt/img2sdat.git
           sudo chmod -R 777 sdat2img/ img2sdat/
 
-      - name: 2. Source Discovery (Alternate Reliable Source)
+      - name: 2. Robust Source Acquisition
         run: |
-          # USING ALTERNATE MIRROR FOR HA3G 18.1
-          wget -q "https://netcologne.dl.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip" -O rom.zip
+          # Robust download with retries and timeout handling
+          # Using a high-bandwidth mirror to avoid 'Exit Code 4'
+          MAX_RETRIES=3
+          URL="https://master.dl.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip"
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            wget -t 5 -w 5 --connect-timeout=30 --random-wait -q "$URL" -O rom.zip && break || sleep 15
+            if [ $i -eq $MAX_RETRIES ]; then echo "FATAL: Download failed after $MAX_RETRIES attempts"; exit 1; fi
+          done
+
           mkdir -p rom_workspace
           unzip -o -q rom.zip -d rom_workspace/ && sync
           
-          # Discovery: Capture paths for block-tools
+          # Discover critical block files
           echo "DAT_PATH=$(find rom_workspace -name 'system.new.dat*' | head -n 1)" >> $GITHUB_ENV
           echo "LIST_PATH=$(find rom_workspace -name 'system.transfer.list' | head -n 1)" >> $GITHUB_ENV
           
-          # WIDE-NET SECURITY MAP SEARCH
-          # We look for file_contexts in the root AND inside any sub-folders
+          # Universal Security Map Discovery
           MAP_FILE=$(find . -name "file_contexts" | head -n 1)
           if [ -n "$MAP_FILE" ]; then
             cp "$MAP_FILE" ${GITHUB_WORKSPACE}/file_contexts
             sed -i 's/\r$//' ${GITHUB_WORKSPACE}/file_contexts
-            echo "SUCCESS: Security map found."
           else
-            # If still missing, we pull a generic 18.1 map to prevent the crash
-            # This is a 'safety net' to guarantee the build continues
-            curl -L "https://raw.githubusercontent.com/LineageOS/android_system_sepolicy/lineage-18.1/private/file_contexts" -o ${GITHUB_WORKSPACE}/file_contexts
-            echo "WARNING: Using external Lineage 18.1 map fallback."
+            # Emergency Fallback to official LineageOS 18.1 map if file is missing
+            curl -sL "https://raw.githubusercontent.com/LineageOS/android_system_sepolicy/lineage-18.1/private/file_contexts" -o ${GITHUB_WORKSPACE}/file_contexts
           fi
 
       - name: 3. Block-Level System Reconstruction
@@ -54,12 +58,16 @@ jobs:
 
       - name: 4. Strategic Injection & Permission Hardening
         run: |
+          # Locate the internal system folder (Handles A/B or Non-A/B)
           TARGET=$(find mnt -type d -path "*/system/app" | head -n 1 | sed 's|/app||')
+          
           sudo mkdir -p $TARGET/priv-app/KT_Store $TARGET/app/KT_Launcher
           
+          # APK Downloads
           sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o $TARGET/priv-app/KT_Store/KT_Store.apk
           sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o $TARGET/app/KT_Launcher/KT_Launcher.apk
           
+          # Permission Handshake
           sudo chmod 644 $TARGET/priv-app/KT_Store/*.apk $TARGET/app/KT_Launcher/*.apk
           sudo chown -R 0:0 $TARGET/priv-app $TARGET/app
 
@@ -86,7 +94,7 @@ jobs:
           sync && sudo umount -l mnt
           img2simg system.img system_sparse.img
           
-          # REPACKING WITH DISCOVERED/FALLBACK CONTEXT
+          # Restoring security map - This fixes the black screen issue
           python3 ${GITHUB_WORKSPACE}/img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system -c ${GITHUB_WORKSPACE}/file_contexts
           
           brotli -q 6 system.new.dat -o system.new.dat.br
@@ -94,6 +102,7 @@ jobs:
 
       - name: 7. Final Package Generation (v1_GOLD)
         run: |
+          # Clean old files and swap with modified KT OS files
           rm -f rom_workspace/system.new.dat* rom_workspace/system.transfer.list
           cp system.new.dat.br system.transfer.list rom_workspace/
           cd rom_workspace && zip -r ../KT_OS_GOLD.zip .
