@@ -36,8 +36,9 @@ jobs:
       - name: 5. System Decompression & Mounting
         run: |
           mkdir -p rom_workspace
+          # 1. Unzip the ROM first
           unzip -q baserom.zip -d rom_workspace/
-          # FIXED: Move the CP command AFTER the unzip is done
+          # 2. NOW copy the file_contexts (It will exist now)
           cp rom_workspace/file_contexts .
           cd rom_workspace
           if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
@@ -55,6 +56,7 @@ jobs:
           sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
           
+          # Fix Permissions
           sudo chmod 644 priv-app/KT_AppStore.apk priv-app/KT_MicroG.apk
           sudo chmod 644 app/KT_Launcher.apk app/KT_Canvas_Pen.apk app/KT_Gemini.apk
           sudo chown -R 0:0 priv-app/ app/
@@ -97,7 +99,7 @@ jobs:
         run: |
           sudo umount rom_workspace/system_mnt
           img2simg rom_workspace/system.img rom_workspace/system_sparse.img
-          # The -c flag below restores the security labels we just copied
+          # The -c flag below restores the security labels we just saved
           python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c file_contexts
           cd rom_workspace
           rm -f system.new.dat.br
