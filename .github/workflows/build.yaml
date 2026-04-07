@@ -24,7 +24,7 @@ jobs:
             baserom.zip
             sdat2img
             img2sdat
-          key: ktos-ha3g-v1
+          key: ktos-ha3g-v2
 
       - name: 4. Acquisition (Skip if Cached)
         if: steps.cache-ktos.outputs.cache-hit != 'true'
@@ -37,13 +37,15 @@ jobs:
         run: |
           mkdir -p rom_workspace
           unzip -q baserom.zip -d rom_workspace/
+          # CRITICAL: Extract security context map for the Black Screen Fix
+          cp rom_workspace/file_contexts .
           cd rom_workspace
           if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
           python3 ../sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
           mkdir system_mnt
           sudo mount -t ext4 -o loop system.img system_mnt
 
-      - name: 6. Automated App Injection
+      - name: 6. Automated App Injection & Permission Fix
         run: |
           cd rom_workspace/system_mnt/system
           sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o priv-app/KT_AppStore.apk
@@ -52,8 +54,13 @@ jobs:
           sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o app/KT_Launcher.apk
           sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
+          
+          # Fix Permissions (Ensures Apps don't crash on boot)
+          sudo chmod 644 priv-app/KT_AppStore.apk priv-app/KT_MicroG.apk
+          sudo chmod 644 app/KT_Launcher.apk app/KT_Canvas_Pen.apk app/KT_Gemini.apk
+          sudo chown -R 0:0 priv-app/ app/
 
-      - name: 7. Boot Video & Enhanced Audio Extraction
+      - name: 7. Boot Video & Audio Fix
         run: |
           mkdir -p boot_workspace
           if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
@@ -66,43 +73,46 @@ jobs:
             echo -e "1080 1920 30\np 1 0 part0" > boot_workspace/desc.txt
             cd boot_workspace && zip -r0 bootanimation.zip part0 desc.txt && cd ..
             
+            # Note 3 specific audio pathing
+            sudo mkdir -p rom_workspace/system_mnt/system/media/audio/ui/
             sudo mv boot_workspace/bootanimation.zip rom_workspace/system_mnt/system/media/
+            sudo cp boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/audio/ui/
             sudo mv boot_workspace/bootaudio.ogg rom_workspace/system_mnt/system/media/
             sudo mv boot_workspace/bootsound.mp3 rom_workspace/system_mnt/system/media/
             sudo mv boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/
             
             sudo bash -c 'echo "ro.config.play.bootanim=1" >> rom_workspace/system_mnt/system/build.prop'
             sudo bash -c 'echo "persist.sys.bootanim.play_sound=1" >> rom_workspace/system_mnt/system/build.prop'
+            sudo bash -c 'echo "ro.config.boot_sound=/system/media/audio/ui/PowerOn.wav" >> rom_workspace/system_mnt/system/build.prop'
           fi
 
-      - name: 8. Hardware Logic (Exynos Tuning)
+      - name: 8. Hardware Logic (Performance Tuning)
         run: |
           sudo bash -c 'cat << EOF > rom_workspace/system_mnt/system/etc/init/kt_os_performance.rc
           on boot
-              write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "conservative"
-              write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor "conservative"
+              write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "interactive"
+              write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor "interactive"
               stop logd
-              swapon /dev/block/mmcblk1p2
-              write /proc/sys/vm/swappiness 100
           EOF'
 
-      - name: 9. Repacking & Max Compression
+      - name: 9. Repacking (The Fix for Black Screen)
         run: |
           sudo umount rom_workspace/system_mnt
           img2simg rom_workspace/system.img rom_workspace/system_sparse.img
-          python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system
+          # The -c flag below restores the security labels
+          python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c file_contexts
           cd rom_workspace
           rm -f system.new.dat.br
-          brotli -q 9 system.new.dat -o system.new.dat.br
+          brotli -q 6 system.new.dat -o system.new.dat.br
           rm -rf system.img system_sparse.img system.new.dat system_mnt
 
-      - name: 10. Final Compilation
+      - name: 10. Final Compilation (Renamed)
         run: |
           cd rom_workspace
-          zip -r ../KT_OS_Note3_ha3g_Ultra.zip .
+          zip -r ../KT_OS_Note3_ha3g_v1_GOLD.zip .
 
       - name: 11. Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: KT_OS_Note3_ha3g_Ultra
-          path: KT_OS_Note3_ha3g_Ultra.zip
+          name: KT_OS_Note3_ha3g_v1_GOLD
+          path: KT_OS_Note3_ha3g_v1_GOLD.zip
