@@ -1,0 +1,116 @@
+name: KT OS Master Cloud Pipeline (Fully Automated)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_kt_os:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 1. Checkout Repository (Fetches kt_boot.mp4)
+        uses: actions/checkout@v4
+
+      - name: 2. Server Setup & Tool Installation
+        run: |
+          echo "[+] Installing Extraction & Media Tools..."
+          sudo apt-get update
+          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl
+
+      - name: 3. Base ROM Acquisition (Permanent Academic Mirror)
+        run: |
+          echo "[+] Downloading Pre-built LineageOS 18.1 hlte Base ROM..."
+          # Using a highly stable university server mirror to completely prevent 404 errors
+          wget -q https://anna.lysator.liu.se/pub/lineageos/full/hlte/20230123/lineage-18.1-20230123-nightly-hlte-signed.zip -O baserom.zip
+          mkdir rom_workspace
+          unzip -q baserom.zip -d rom_workspace/
+
+      - name: 4. Fetch Unpack & Repack Tools
+        run: |
+          echo "[+] Cloning Python Data Tools..."
+          git clone https://github.com/xpirt/sdat2img.git
+          git clone https://github.com/xpirt/img2sdat.git
+
+      - name: 5. System Decompression & Mounting
+        run: |
+          echo "[+] Unpacking Android System Image..."
+          cd rom_workspace
+          brotli -d system.new.dat.br
+          python3 ../sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
+          mkdir system_mnt
+          sudo mount -t ext4 -o loop system.img system_mnt
+
+      - name: 6. Automated App Injection (Zero Manual Downloads)
+        run: |
+          echo "[+] Injecting Core Engines & Apps directly into the OS..."
+          cd rom_workspace/system_mnt/system
+          
+          # Core Engines (App Store, MicroG, Launcher)
+          sudo wget -q "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -O priv-app/KT_AppStore.apk
+          sudo wget -q "https://github.com/microg/GmsCore/releases/download/v0.3.2.240913/com.google.android.gms-240913008.apk" -O priv-app/KT_MicroG.apk
+          sudo wget -q "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -O app/KT_Launcher.apk
+          
+          # S-Pen Canvas App (Paintroid)
+          sudo wget -q "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -O app/KT_Canvas_Pen.apk
+          
+          # 32-bit Gemini Wrapper (Native Alpha)
+          sudo wget -q "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -O app/KT_Gemini.apk
+
+      - name: 7. Boot Video Conversion & Audio Extraction
+        run: |
+          echo "[+] Processing kt_boot.mp4 into Android Boot Sequence..."
+          mkdir boot_workspace
+          
+          # Safe-check to ensure the video exists in your repo before converting
+          if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis boot_workspace/bootaudio.ogg
+            mkdir boot_workspace/part0
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=60" boot_workspace/part0/%03d.png
+            
+            echo -e "1080 1920 60\np 1 0 part0" > boot_workspace/desc.txt
+            cd boot_workspace
+            zip -r0 bootanimation.zip part0 desc.txt
+            cd ..
+            
+            sudo mv boot_workspace/bootanimation.zip rom_workspace/system_mnt/system/media/
+            sudo mv boot_workspace/bootaudio.ogg rom_workspace/system_mnt/system/media/
+            sudo bash -c 'echo "ro.config.play.bootanim=1" >> rom_workspace/system_mnt/system/build.prop'
+          else
+            echo "[-] WARNING: kt_boot.mp4 not found! Upload it to GitHub if you want the custom animation."
+          fi
+
+      - name: 8. Hardware Logic (Battery & SD Swap)
+        run: |
+          echo "[+] Writing Deep Sleep & CPU Scripts..."
+          sudo bash -c 'cat << EOF > rom_workspace/system_mnt/system/etc/init/kt_os_performance.rc
+          on boot
+              write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "conservative"
+              write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor "conservative"
+              stop logd
+              swapon /dev/block/mmcblk1p2
+              write /proc/sys/vm/swappiness 100
+          EOF'
+
+      - name: 9. System Unmounting & Repacking
+        run: |
+          echo "[+] Unmounting and Repacking System..."
+          sudo umount rom_workspace/system_mnt
+          python3 img2sdat/img2sdat.py rom_workspace/system.img -o rom_workspace -v 4 -p system
+          
+          echo "[+] Compressing to .br format..."
+          cd rom_workspace
+          brotli -q 6 system.new.dat -o system.new.dat.br
+          rm -rf system.img system.new.dat system_mnt
+
+      - name: 10. Final Compilation
+        run: |
+          echo "[+] Zipping KT OS Flashable ROM..."
+          cd rom_workspace
+          zip -r ../KT_OS_Final_Build.zip .
+
+      - name: 11. Artifact Delivery
+        uses: actions/upload-artifact@v4
+        with:
+          name: KT_OS_Flashable_ROM
+          path: KT_OS_Final_Build.zip
+          compression-level: 0
