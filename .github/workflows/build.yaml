@@ -107,6 +107,7 @@ jobs:
           
           echo "[+] Compressing to .br format..."
           cd rom_workspace
+          rm -f system.new.dat.br  # <--- Added this line to delete the old file
           brotli -q 6 system.new.dat -o system.new.dat.br
           rm -rf system.img system_sparse.img system.new.dat system_mnt
 
