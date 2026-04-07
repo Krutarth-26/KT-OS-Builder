@@ -1,4 +1,4 @@
-Name: KT OS Master Cloud Pipeline (ha3g + Full Sound Support)
+name: KT OS Master Cloud Pipeline (ha3g Exynos)
 
 on:
   workflow_dispatch:
@@ -57,12 +57,10 @@ jobs:
         run: |
           mkdir -p boot_workspace
           if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
-            echo "[+] Extracting audio in multiple formats for compatibility..."
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis boot_workspace/bootaudio.ogg
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn boot_workspace/bootsound.mp3
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 boot_workspace/PowerOn.wav
             
-            echo "[+] Generating 1080p frames for Note 3..."
             mkdir -p boot_workspace/part0
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=30" boot_workspace/part0/%03d.png
             echo -e "1080 1920 30\np 1 0 part0" > boot_workspace/desc.txt
@@ -73,7 +71,6 @@ jobs:
             sudo mv boot_workspace/bootsound.mp3 rom_workspace/system_mnt/system/media/
             sudo mv boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/
             
-            echo "[+] Forcing boot audio properties..."
             sudo bash -c 'echo "ro.config.play.bootanim=1" >> rom_workspace/system_mnt/system/build.prop'
             sudo bash -c 'echo "persist.sys.bootanim.play_sound=1" >> rom_workspace/system_mnt/system/build.prop'
           fi
@@ -105,7 +102,7 @@ jobs:
           zip -r ../KT_OS_Note3_ha3g_Ultra.zip .
 
       - name: 11. Upload Build
-        uses: upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: KT_OS_Note3_ha3g_Ultra
           path: KT_OS_Note3_ha3g_Ultra.zip
