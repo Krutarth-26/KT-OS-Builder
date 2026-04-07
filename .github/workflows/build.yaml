@@ -15,7 +15,7 @@ jobs:
         run: |
           echo "[+] Installing Extraction & Media Tools..."
           sudo apt-get update
-          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq
+          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq android-sdk-libsparse-utils
 
       - name: 3. Base ROM Acquisition (Permanent Academic Mirror)
         run: |
@@ -45,17 +45,16 @@ jobs:
           cd rom_workspace/system_mnt/system
           
           # Core Engines (App Store, MicroG, Launcher)
-          # Using curl -L to seamlessly handle Gitlab/AWS redirects that break wget
           sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o priv-app/KT_AppStore.apk
           
-          # Dynamic fetcher for MicroG (prevents 404s when developers delete older versions)
+          # Dynamic fetcher for MicroG
           MICROG_URL=$(curl -sL https://api.github.com/repos/microg/GmsCore/releases/latest | grep "browser_download_url.*com.google.android.gms" | grep -v "hw" | head -n 1 | cut -d '"' -f 4)
           sudo curl -L "$MICROG_URL" -o priv-app/KT_MicroG.apk
           
-          # Lawnchair Launcher (Stable Alpha Tag)
+          # Lawnchair Launcher
           sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o app/KT_Launcher.apk
           
-          # S-Pen Canvas App (Paintroid) - Checks repo, falls back to archive if F-Droid moved it
+          # S-Pen Canvas App (Paintroid)
           sudo curl -L -f "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk || sudo curl -L "https://f-droid.org/archive/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           
           # 32-bit Gemini Wrapper (Native Alpha)
@@ -97,14 +96,19 @@ jobs:
 
       - name: 9. System Unmounting & Repacking
         run: |
-          echo "[+] Unmounting and Repacking System..."
+          echo "[+] Unmounting System..."
           sudo umount rom_workspace/system_mnt
-          python3 img2sdat/img2sdat.py rom_workspace/system.img -o rom_workspace -v 4 -p system
+          
+          echo "[+] Converting Raw ext4 to Sparse Image..."
+          img2simg rom_workspace/system.img rom_workspace/system_sparse.img
+          
+          echo "[+] Repacking into Android DAT format..."
+          python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system
           
           echo "[+] Compressing to .br format..."
           cd rom_workspace
           brotli -q 6 system.new.dat -o system.new.dat.br
-          rm -rf system.img system.new.dat system_mnt
+          rm -rf system.img system_sparse.img system.new.dat system_mnt
 
       - name: 10. Final Compilation
         run: |
