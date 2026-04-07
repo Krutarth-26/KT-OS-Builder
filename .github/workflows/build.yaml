@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p rom_workspace
           unzip -q baserom.zip -d rom_workspace/
-          # CRITICAL: Extract security context map for the Black Screen Fix
+          # FIXED: Move the CP command AFTER the unzip is done
           cp rom_workspace/file_contexts .
           cd rom_workspace
           if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
@@ -55,7 +55,6 @@ jobs:
           sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
           
-          # Fix Permissions (Ensures Apps don't crash on boot)
           sudo chmod 644 priv-app/KT_AppStore.apk priv-app/KT_MicroG.apk
           sudo chmod 644 app/KT_Launcher.apk app/KT_Canvas_Pen.apk app/KT_Gemini.apk
           sudo chown -R 0:0 priv-app/ app/
@@ -73,7 +72,6 @@ jobs:
             echo -e "1080 1920 30\np 1 0 part0" > boot_workspace/desc.txt
             cd boot_workspace && zip -r0 bootanimation.zip part0 desc.txt && cd ..
             
-            # Note 3 specific audio pathing
             sudo mkdir -p rom_workspace/system_mnt/system/media/audio/ui/
             sudo mv boot_workspace/bootanimation.zip rom_workspace/system_mnt/system/media/
             sudo cp boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/audio/ui/
@@ -99,7 +97,7 @@ jobs:
         run: |
           sudo umount rom_workspace/system_mnt
           img2simg rom_workspace/system.img rom_workspace/system_sparse.img
-          # The -c flag below restores the security labels
+          # The -c flag below restores the security labels we just copied
           python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c file_contexts
           cd rom_workspace
           rm -f system.new.dat.br
