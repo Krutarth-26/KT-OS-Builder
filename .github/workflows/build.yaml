@@ -1,4 +1,4 @@
-name: KT OS Master Cloud Pipeline (Fully Automated)
+Name: KT OS Master Cloud Pipeline (ha3g + Full Sound Support)
 
 on:
   workflow_dispatch:
@@ -8,83 +8,78 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 1. Checkout Repository (Fetches kt_boot.mp4)
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 2. Server Setup & Tool Installation
+      - name: 2. Server Setup
         run: |
-          echo "[+] Installing Extraction & Media Tools..."
           sudo apt-get update
           sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq android-sdk-libsparse-utils
 
-      - name: 3. Base ROM Acquisition (Permanent Academic Mirror)
-        run: |
-          echo "[+] Downloading Pre-built LineageOS 18.1 hlte Base ROM..."
-          wget -q https://anna.lysator.liu.se/pub/lineageos/full/hlte/20230123/lineage-18.1-20230123-nightly-hlte-signed.zip -O baserom.zip
-          mkdir rom_workspace
-          unzip -q baserom.zip -d rom_workspace/
+      - name: 3. Cache Base ROM & Tools
+        id: cache-ktos
+        uses: actions/cache@v4
+        with:
+          path: |
+            baserom.zip
+            sdat2img
+            img2sdat
+          key: ktos-ha3g-v1
 
-      - name: 4. Fetch Unpack & Repack Tools
+      - name: 4. Acquisition (Skip if Cached)
+        if: steps.cache-ktos.outputs.cache-hit != 'true'
         run: |
-          echo "[+] Cloning Python Data Tools..."
+          wget -L -q "https://sourceforge.net/projects/ajhut/files/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip/download" -O baserom.zip
           git clone https://github.com/xpirt/sdat2img.git
           git clone https://github.com/xpirt/img2sdat.git
 
       - name: 5. System Decompression & Mounting
         run: |
-          echo "[+] Unpacking Android System Image..."
+          mkdir -p rom_workspace
+          unzip -q baserom.zip -d rom_workspace/
           cd rom_workspace
-          brotli -d system.new.dat.br
+          if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
           python3 ../sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
           mkdir system_mnt
           sudo mount -t ext4 -o loop system.img system_mnt
 
-      - name: 6. Automated App Injection (Zero Manual Downloads)
+      - name: 6. Automated App Injection
         run: |
-          echo "[+] Injecting Core Engines & Apps directly into the OS..."
           cd rom_workspace/system_mnt/system
-          
-          # Core Engines (App Store, MicroG, Launcher)
           sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o priv-app/KT_AppStore.apk
-          
-          # Dynamic fetcher for MicroG
           MICROG_URL=$(curl -sL https://api.github.com/repos/microg/GmsCore/releases/latest | grep "browser_download_url.*com.google.android.gms" | grep -v "hw" | head -n 1 | cut -d '"' -f 4)
           sudo curl -L "$MICROG_URL" -o priv-app/KT_MicroG.apk
-          
-          # Lawnchair Launcher
           sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o app/KT_Launcher.apk
-          
-          # S-Pen Canvas App (Paintroid)
-          sudo curl -L -f "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk || sudo curl -L "https://f-droid.org/archive/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
-          
-          # 32-bit Gemini Wrapper (Native Alpha)
+          sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
 
-      - name: 7. Boot Video Conversion & Audio Extraction
+      - name: 7. Boot Video & Enhanced Audio Extraction
         run: |
-          echo "[+] Processing kt_boot.mp4 into Android Boot Sequence..."
-          mkdir boot_workspace
-          
+          mkdir -p boot_workspace
           if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
+            echo "[+] Extracting audio in multiple formats for compatibility..."
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis boot_workspace/bootaudio.ogg
-            mkdir boot_workspace/part0
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=60" boot_workspace/part0/%03d.png
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn boot_workspace/bootsound.mp3
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 boot_workspace/PowerOn.wav
             
-            echo -e "1080 1920 60\np 1 0 part0" > boot_workspace/desc.txt
-            cd boot_workspace
-            zip -r0 bootanimation.zip part0 desc.txt
-            cd ..
+            echo "[+] Generating 1080p frames for Note 3..."
+            mkdir -p boot_workspace/part0
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=30" boot_workspace/part0/%03d.png
+            echo -e "1080 1920 30\np 1 0 part0" > boot_workspace/desc.txt
+            cd boot_workspace && zip -r0 bootanimation.zip part0 desc.txt && cd ..
             
             sudo mv boot_workspace/bootanimation.zip rom_workspace/system_mnt/system/media/
             sudo mv boot_workspace/bootaudio.ogg rom_workspace/system_mnt/system/media/
+            sudo mv boot_workspace/bootsound.mp3 rom_workspace/system_mnt/system/media/
+            sudo mv boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/
+            
+            echo "[+] Forcing boot audio properties..."
             sudo bash -c 'echo "ro.config.play.bootanim=1" >> rom_workspace/system_mnt/system/build.prop'
-          else
-            echo "[-] WARNING: kt_boot.mp4 not found! Upload it to GitHub if you want the custom animation."
+            sudo bash -c 'echo "persist.sys.bootanim.play_sound=1" >> rom_workspace/system_mnt/system/build.prop'
           fi
 
-      - name: 8. Hardware Logic (Battery & SD Swap)
+      - name: 8. Hardware Logic (Exynos Tuning)
         run: |
-          echo "[+] Writing Deep Sleep & CPU Scripts..."
           sudo bash -c 'cat << EOF > rom_workspace/system_mnt/system/etc/init/kt_os_performance.rc
           on boot
               write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "conservative"
@@ -94,32 +89,23 @@ jobs:
               write /proc/sys/vm/swappiness 100
           EOF'
 
-      - name: 9. System Unmounting & Repacking
+      - name: 9. Repacking & Max Compression
         run: |
-          echo "[+] Unmounting System..."
           sudo umount rom_workspace/system_mnt
-          
-          echo "[+] Converting Raw ext4 to Sparse Image..."
           img2simg rom_workspace/system.img rom_workspace/system_sparse.img
-          
-          echo "[+] Repacking into Android DAT format..."
           python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system
-          
-          echo "[+] Compressing to .br format..."
           cd rom_workspace
-          rm -f system.new.dat.br  # <--- Added this line to delete the old file
-          brotli -q 6 system.new.dat -o system.new.dat.br
+          rm -f system.new.dat.br
+          brotli -q 9 system.new.dat -o system.new.dat.br
           rm -rf system.img system_sparse.img system.new.dat system_mnt
 
       - name: 10. Final Compilation
         run: |
-          echo "[+] Zipping KT OS Flashable ROM..."
           cd rom_workspace
-          zip -r ../KT_OS_Final_Build.zip .
+          zip -r ../KT_OS_Note3_ha3g_Ultra.zip .
 
-      - name: 11. Artifact Delivery
-        uses: actions/upload-artifact@v4
+      - name: 11. Upload Build
+        uses: upload-artifact@v4
         with:
-          name: KT_OS_Flashable_ROM
-          path: KT_OS_Final_Build.zip
-          compression-level: 0
+          name: KT_OS_Note3_ha3g_Ultra
+          path: KT_OS_Note3_ha3g_Ultra.zip
