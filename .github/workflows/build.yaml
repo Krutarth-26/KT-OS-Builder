@@ -15,12 +15,11 @@ jobs:
         run: |
           echo "[+] Installing Extraction & Media Tools..."
           sudo apt-get update
-          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl
+          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq
 
       - name: 3. Base ROM Acquisition (Permanent Academic Mirror)
         run: |
           echo "[+] Downloading Pre-built LineageOS 18.1 hlte Base ROM..."
-          # Using a highly stable university server mirror to completely prevent 404 errors
           wget -q https://anna.lysator.liu.se/pub/lineageos/full/hlte/20230123/lineage-18.1-20230123-nightly-hlte-signed.zip -O baserom.zip
           mkdir rom_workspace
           unzip -q baserom.zip -d rom_workspace/
@@ -46,22 +45,27 @@ jobs:
           cd rom_workspace/system_mnt/system
           
           # Core Engines (App Store, MicroG, Launcher)
-          sudo wget -q "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -O priv-app/KT_AppStore.apk
-          sudo wget -q "https://github.com/microg/GmsCore/releases/download/v0.3.2.240913/com.google.android.gms-240913008.apk" -O priv-app/KT_MicroG.apk
-          sudo wget -q "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -O app/KT_Launcher.apk
+          # Using curl -L to seamlessly handle Gitlab/AWS redirects that break wget
+          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o priv-app/KT_AppStore.apk
           
-          # S-Pen Canvas App (Paintroid)
-          sudo wget -q "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -O app/KT_Canvas_Pen.apk
+          # Dynamic fetcher for MicroG (prevents 404s when developers delete older versions)
+          MICROG_URL=$(curl -sL https://api.github.com/repos/microg/GmsCore/releases/latest | grep "browser_download_url.*com.google.android.gms" | grep -v "hw" | head -n 1 | cut -d '"' -f 4)
+          sudo curl -L "$MICROG_URL" -o priv-app/KT_MicroG.apk
+          
+          # Lawnchair Launcher (Stable Alpha Tag)
+          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o app/KT_Launcher.apk
+          
+          # S-Pen Canvas App (Paintroid) - Checks repo, falls back to archive if F-Droid moved it
+          sudo curl -L -f "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk || sudo curl -L "https://f-droid.org/archive/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
           
           # 32-bit Gemini Wrapper (Native Alpha)
-          sudo wget -q "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -O app/KT_Gemini.apk
+          sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
 
       - name: 7. Boot Video Conversion & Audio Extraction
         run: |
           echo "[+] Processing kt_boot.mp4 into Android Boot Sequence..."
           mkdir boot_workspace
           
-          # Safe-check to ensure the video exists in your repo before converting
           if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
             ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis boot_workspace/bootaudio.ogg
             mkdir boot_workspace/part0
