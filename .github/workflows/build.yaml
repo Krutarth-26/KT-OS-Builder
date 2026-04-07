@@ -1,109 +1,119 @@
-name: KT OS Master Cloud Pipeline (ha3g Exynos)
+name: KT OS Hardened Final Pipeline (ha3g Exynos)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build_kt_os:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
       - name: 1. Environment & Tool Preparation
         run: |
+          set -e
           sudo apt-get update
           sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq android-sdk-libsparse-utils
           git clone https://github.com/xpirt/sdat2img.git
           git clone https://github.com/xpirt/img2sdat.git
-          # Enforce full recursive permissions for tools
           sudo chmod -R 777 sdat2img/ img2sdat/
 
-      - name: 2. Source Discovery & Security Sanitization
+      - name: 2. Source Extraction & Path Discovery
         run: |
-          wget -L -q "https://sourceforge.net/projects/ajhut/files/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip/download" -O baserom.zip
+          set -e
+          wget -q "https://sourceforge.net/projects/ajhut/files/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip/download" -O rom.zip
           mkdir -p rom_workspace
-          unzip -q baserom.zip -d rom_workspace/ && sync
+          unzip -q rom.zip -d rom_workspace/ && sync
           
-          # Discovery: Handle any ZIP folder structure automatically
-          find rom_workspace -name "system.new.dat*" -exec mv {} rom_workspace/ \;
-          find rom_workspace -name "system.transfer.list" -exec mv {} rom_workspace/ \;
+          # Dynamic Path Discovery
+          echo "DAT_PATH=$(find rom_workspace -name 'system.new.dat*' | head -n 1)" >> $GITHUB_ENV
+          echo "LIST_PATH=$(find rom_workspace -name 'system.transfer.list' | head -n 1)" >> $GITHUB_ENV
           
-          # Security Map Audit: Extract, sanitize, and unique-sort labels
+          # Security Map Extraction
           find rom_workspace -name "file_contexts" -exec cp {} . \;
-          if [ -s "file_contexts" ]; then
-            sed -i 's/\r$//' file_contexts
-            sort -u file_contexts -o file_contexts
-          else
-            echo "CRITICAL: file_contexts is missing or empty!" && exit 1
-          fi
+          if [ ! -s "file_contexts" ]; then echo "FATAL: Security map missing"; exit 1; fi
+          sed -i 's/\r$//' file_contexts
 
       - name: 3. Block-Level System Reconstruction
         run: |
-          cd rom_workspace
-          if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
-          # Use absolute paths to prevent shell-switching errors
-          python3 ${GITHUB_WORKSPACE}/sdat2img/sdat2img.py system.transfer.list system.new.dat system.img && sync
-          mkdir system_mnt
-          sudo mount -t ext4 -o loop system.img system_mnt
-
-      - name: 4. Injection & Permission Hardening
-        run: |
-          TARGET="rom_workspace/system_mnt/system"
+          set -e
+          if [[ "$DAT_PATH" == *.br ]]; then
+            brotli -d "$DAT_PATH"
+            DAT_PATH="${DAT_PATH%.br}"
+          fi
+          sync
           
-          # App Acquisition (Aurora, Launcher, Canvas)
-          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o $TARGET/priv-app/KT_AppStore.apk
-          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o $TARGET/app/KT_Launcher.apk
-          sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o $TARGET/app/KT_Canvas_Pen.apk
-          
-          # Rare Hardware Permission Fix: Corrects UID/GID for 32-bit Exynos compatibility
-          sudo chmod 644 $TARGET/priv-app/*.apk $TARGET/app/*.apk
-          sudo chown -R 0:0 $TARGET/priv-app/ $TARGET/app/
+          python3 sdat2img/sdat2img.py "$LIST_PATH" "$DAT_PATH" system.img
+          mkdir mnt
+          sudo mount -t ext4 -o loop system.img mnt
 
-      - name: 5. Display & Audio Engine Calibration
+      - name: 4. Strategic Injection & Permission Hardening
         run: |
-          if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
-            mkdir -p b_work/part0
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis b_work/bootaudio.ogg
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 b_work/PowerOn.wav
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=30" b_work/part0/%03d.png
-            echo -e "1080 1920 30\np 1 0 part0" > b_work/desc.txt
-            (cd b_work && zip -r0 bootanimation.zip part0 desc.txt)
+          set -e
+          # Detect real system path (handles /system/ vs /system/system/)
+          TARGET=$(find mnt -type d -path "*/system/app" | head -n 1 | sed 's|/app||')
+          
+          # App Structure
+          sudo mkdir -p $TARGET/priv-app/KT_AppStore
+          sudo mkdir -p $TARGET/app/KT_Launcher
+          
+          # Downloads
+          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o $TARGET/priv-app/KT_AppStore/KT_AppStore.apk
+          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o $TARGET/app/KT_Launcher/KT_Launcher.apk
+          
+          # Permissions
+          sudo chmod 644 $TARGET/priv-app/KT_AppStore/*.apk
+          sudo chmod 644 $TARGET/app/KT_Launcher/*.apk
+          sudo chown -R 0:0 $TARGET/priv-app $TARGET/app
+
+      - name: 5. Boot Animation & Verified Audio Trigger
+        run: |
+          set -e
+          if [ -f "kt_boot.mp4" ]; then
+            mkdir -p work/part0
+            ffmpeg -i kt_boot.mp4 -vn -c:a libvorbis work/PowerOn.ogg
+            ffmpeg -i kt_boot.mp4 -vf "scale=1080:1920,fps=30" work/part0/%03d.png
+            echo -e "1080 1920 30\np 1 0 part0" > work/desc.txt
+            (cd work && zip -r0 bootanimation.zip part0 desc.txt)
             
-            # Note 3 hardware pathing
-            SYS_MEDIA="rom_workspace/system_mnt/system/media"
-            sudo mkdir -p $SYS_MEDIA/audio/ui/
-            sudo mv b_work/bootanimation.zip $SYS_MEDIA/
-            sudo cp b_work/PowerOn.wav $SYS_MEDIA/audio/ui/
-            sudo cp b_work/bootaudio.ogg $SYS_MEDIA/
-            
-            # Property Injection (Dynamically locates build.prop)
-            BPROP=$(sudo find rom_workspace/system_mnt -name "build.prop" | head -n 1)
-            sudo bash -c "echo 'ro.config.play.bootanim=1' >> $BPROP"
-            sudo bash -c "echo 'persist.sys.bootanim.play_sound=1' >> $BPROP"
-            sudo bash -c "echo 'ro.config.boot_sound=/system/media/audio/ui/PowerOn.wav' >> $BPROP"
+            MEDIA=$(find mnt -type d -path "*/media" | head -n 1)
+            sudo mkdir -p $MEDIA/audio/ui
+            sudo cp work/bootanimation.zip $MEDIA/
+            sudo cp work/PowerOn.ogg $MEDIA/audio/ui/
+
+            # HARDWARE FIX: Create a dedicated init service for the sound
+            # This ensures the sound plays even if the animation service skips it
+            INIT_DIR=$(find mnt -type d -path "*/etc/init" | head -n 1)
+            sudo bash -c "cat << EOF > $INIT_DIR/kt_sounds.rc
+          service kt_bootsound /system/bin/stagefright -a -o /system/media/audio/ui/PowerOn.ogg
+              class late_start
+              user root
+              group audio
+              oneshot
+          EOF"
           fi
 
-      - name: 6. Repacking & Hardware Handshake (SELinux)
+      - name: 6. SELinux Repack & Hardware Handshake
         run: |
-          # Flush all disk writes before unmounting
-          sync && sudo umount -l rom_workspace/system_mnt
+          set -e
+          sync && sudo umount -l mnt
+          img2simg system.img system_sparse.img
           
-          # Verification: Convert to sparse image with block validation
-          img2simg rom_workspace/system.img rom_workspace/system_sparse.img
+          # Restoring file_contexts is mandatory for Note 3 GPU initialization
+          python3 img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system -c file_contexts
           
-          # THE FIX: Restoring the security context map for Logcat and Screen drivers
-          python3 ${GITHUB_WORKSPACE}/img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c ${GITHUB_WORKSPACE}/file_contexts
-          
-          cd rom_workspace
           brotli -q 6 system.new.dat -o system.new.dat.br
-          rm -rf system.img system_sparse.img system.new.dat system_mnt
+          rm -f system.img system_sparse.img system.new.dat
 
       - name: 7. Final Compilation (v1_GOLD)
         run: |
+          set -e
+          rm -f rom_workspace/system.new.dat* rom_workspace/system.transfer.list
+          cp system.new.dat.br system.transfer.list rom_workspace/
           cd rom_workspace
-          zip -r ../KT_OS_Note3_ha3g_v1_GOLD.zip .
+          zip -r ../KT_OS_Note3_v1_GOLD.zip .
 
       - name: 8. Artifact Delivery
         uses: actions/upload-artifact@v4
         with:
-          name: KT_OS_Note3_ha3g_v1_GOLD
-          path: KT_OS_Note3_ha3g_v1_GOLD.zip
+          name: KT_OS_Note3_v1_GOLD
+          path: KT_OS_Note3_v1_GOLD.zip
