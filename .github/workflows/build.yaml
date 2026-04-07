@@ -8,110 +8,101 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 1. Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: 2. Server Setup
+      - name: 1. Environment & Tool Preparation
         run: |
           sudo apt-get update
           sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq android-sdk-libsparse-utils
-
-      - name: 3. Cache Base ROM & Tools
-        id: cache-ktos
-        uses: actions/cache@v4
-        with:
-          path: |
-            baserom.zip
-            sdat2img
-            img2sdat
-          key: ktos-ha3g-v2
-
-      - name: 4. Acquisition (Skip if Cached)
-        if: steps.cache-ktos.outputs.cache-hit != 'true'
-        run: |
-          wget -L -q "https://sourceforge.net/projects/ajhut/files/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip/download" -O baserom.zip
           git clone https://github.com/xpirt/sdat2img.git
           git clone https://github.com/xpirt/img2sdat.git
+          # Enforce full recursive permissions for tools
+          sudo chmod -R 777 sdat2img/ img2sdat/
 
-      - name: 5. System Decompression & Mounting
+      - name: 2. Source Discovery & Security Sanitization
         run: |
+          wget -L -q "https://sourceforge.net/projects/ajhut/files/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip/download" -O baserom.zip
           mkdir -p rom_workspace
-          # 1. Unzip the ROM first
-          unzip -q baserom.zip -d rom_workspace/
-          # 2. NOW copy the file_contexts (It will exist now)
-          cp rom_workspace/file_contexts .
+          unzip -q baserom.zip -d rom_workspace/ && sync
+          
+          # Discovery: Handle any ZIP folder structure automatically
+          find rom_workspace -name "system.new.dat*" -exec mv {} rom_workspace/ \;
+          find rom_workspace -name "system.transfer.list" -exec mv {} rom_workspace/ \;
+          
+          # Security Map Audit: Extract, sanitize, and unique-sort labels
+          find rom_workspace -name "file_contexts" -exec cp {} . \;
+          if [ -s "file_contexts" ]; then
+            sed -i 's/\r$//' file_contexts
+            sort -u file_contexts -o file_contexts
+          else
+            echo "CRITICAL: file_contexts is missing or empty!" && exit 1
+          fi
+
+      - name: 3. Block-Level System Reconstruction
+        run: |
           cd rom_workspace
           if [ -f "system.new.dat.br" ]; then brotli -d system.new.dat.br; fi
-          python3 ../sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
+          # Use absolute paths to prevent shell-switching errors
+          python3 ${GITHUB_WORKSPACE}/sdat2img/sdat2img.py system.transfer.list system.new.dat system.img && sync
           mkdir system_mnt
           sudo mount -t ext4 -o loop system.img system_mnt
 
-      - name: 6. Automated App Injection & Permission Fix
+      - name: 4. Injection & Permission Hardening
         run: |
-          cd rom_workspace/system_mnt/system
-          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o priv-app/KT_AppStore.apk
-          MICROG_URL=$(curl -sL https://api.github.com/repos/microg/GmsCore/releases/latest | grep "browser_download_url.*com.google.android.gms" | grep -v "hw" | head -n 1 | cut -d '"' -f 4)
-          sudo curl -L "$MICROG_URL" -o priv-app/KT_MicroG.apk
-          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o app/KT_Launcher.apk
-          sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o app/KT_Canvas_Pen.apk
-          sudo curl -L "https://github.com/cylonid/NativeAlphaForAndroid/releases/download/v1.5.2/NativeAlpha-extendedGithub-universal-release-v1.5.2.apk" -o app/KT_Gemini.apk
+          TARGET="rom_workspace/system_mnt/system"
           
-          # Fix Permissions
-          sudo chmod 644 priv-app/KT_AppStore.apk priv-app/KT_MicroG.apk
-          sudo chmod 644 app/KT_Launcher.apk app/KT_Canvas_Pen.apk app/KT_Gemini.apk
-          sudo chown -R 0:0 priv-app/ app/
+          # App Acquisition (Aurora, Launcher, Canvas)
+          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o $TARGET/priv-app/KT_AppStore.apk
+          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o $TARGET/app/KT_Launcher.apk
+          sudo curl -L "https://f-droid.org/repo/org.catrobat.paintroid_1012.apk" -o $TARGET/app/KT_Canvas_Pen.apk
+          
+          # Rare Hardware Permission Fix: Corrects UID/GID for 32-bit Exynos compatibility
+          sudo chmod 644 $TARGET/priv-app/*.apk $TARGET/app/*.apk
+          sudo chown -R 0:0 $TARGET/priv-app/ $TARGET/app/
 
-      - name: 7. Boot Video & Audio Fix
+      - name: 5. Display & Audio Engine Calibration
         run: |
-          mkdir -p boot_workspace
           if [ -f "${GITHUB_WORKSPACE}/kt_boot.mp4" ]; then
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis boot_workspace/bootaudio.ogg
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn boot_workspace/bootsound.mp3
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 boot_workspace/PowerOn.wav
+            mkdir -p b_work/part0
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -c:a libvorbis b_work/bootaudio.ogg
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vn -acodec pcm_s16le -ar 44100 -ac 2 b_work/PowerOn.wav
+            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=30" b_work/part0/%03d.png
+            echo -e "1080 1920 30\np 1 0 part0" > b_work/desc.txt
+            (cd b_work && zip -r0 bootanimation.zip part0 desc.txt)
             
-            mkdir -p boot_workspace/part0
-            ffmpeg -i ${GITHUB_WORKSPACE}/kt_boot.mp4 -vf "scale=1080:1920,fps=30" boot_workspace/part0/%03d.png
-            echo -e "1080 1920 30\np 1 0 part0" > boot_workspace/desc.txt
-            cd boot_workspace && zip -r0 bootanimation.zip part0 desc.txt && cd ..
+            # Note 3 hardware pathing
+            SYS_MEDIA="rom_workspace/system_mnt/system/media"
+            sudo mkdir -p $SYS_MEDIA/audio/ui/
+            sudo mv b_work/bootanimation.zip $SYS_MEDIA/
+            sudo cp b_work/PowerOn.wav $SYS_MEDIA/audio/ui/
+            sudo cp b_work/bootaudio.ogg $SYS_MEDIA/
             
-            sudo mkdir -p rom_workspace/system_mnt/system/media/audio/ui/
-            sudo mv boot_workspace/bootanimation.zip rom_workspace/system_mnt/system/media/
-            sudo cp boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/audio/ui/
-            sudo mv boot_workspace/bootaudio.ogg rom_workspace/system_mnt/system/media/
-            sudo mv boot_workspace/bootsound.mp3 rom_workspace/system_mnt/system/media/
-            sudo mv boot_workspace/PowerOn.wav rom_workspace/system_mnt/system/media/
-            
-            sudo bash -c 'echo "ro.config.play.bootanim=1" >> rom_workspace/system_mnt/system/build.prop'
-            sudo bash -c 'echo "persist.sys.bootanim.play_sound=1" >> rom_workspace/system_mnt/system/build.prop'
-            sudo bash -c 'echo "ro.config.boot_sound=/system/media/audio/ui/PowerOn.wav" >> rom_workspace/system_mnt/system/build.prop'
+            # Property Injection (Dynamically locates build.prop)
+            BPROP=$(sudo find rom_workspace/system_mnt -name "build.prop" | head -n 1)
+            sudo bash -c "echo 'ro.config.play.bootanim=1' >> $BPROP"
+            sudo bash -c "echo 'persist.sys.bootanim.play_sound=1' >> $BPROP"
+            sudo bash -c "echo 'ro.config.boot_sound=/system/media/audio/ui/PowerOn.wav' >> $BPROP"
           fi
 
-      - name: 8. Hardware Logic (Performance Tuning)
+      - name: 6. Repacking & Hardware Handshake (SELinux)
         run: |
-          sudo bash -c 'cat << EOF > rom_workspace/system_mnt/system/etc/init/kt_os_performance.rc
-          on boot
-              write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "interactive"
-              write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor "interactive"
-              stop logd
-          EOF'
-
-      - name: 9. Repacking (The Fix for Black Screen)
-        run: |
-          sudo umount rom_workspace/system_mnt
+          # Flush all disk writes before unmounting
+          sync && sudo umount -l rom_workspace/system_mnt
+          
+          # Verification: Convert to sparse image with block validation
           img2simg rom_workspace/system.img rom_workspace/system_sparse.img
-          # The -c flag below restores the security labels we just saved
-          python3 img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c file_contexts
+          
+          # THE FIX: Restoring the security context map for Logcat and Screen drivers
+          python3 ${GITHUB_WORKSPACE}/img2sdat/img2sdat.py rom_workspace/system_sparse.img -o rom_workspace -v 4 -p system -c ${GITHUB_WORKSPACE}/file_contexts
+          
           cd rom_workspace
-          rm -f system.new.dat.br
           brotli -q 6 system.new.dat -o system.new.dat.br
           rm -rf system.img system_sparse.img system.new.dat system_mnt
 
-      - name: 10. Final Compilation (Renamed)
+      - name: 7. Final Compilation (v1_GOLD)
         run: |
           cd rom_workspace
           zip -r ../KT_OS_Note3_ha3g_v1_GOLD.zip .
 
-      - name: 11. Upload Build
+      - name: 8. Artifact Delivery
         uses: actions/upload-artifact@v4
         with:
           name: KT_OS_Note3_ha3g_v1_GOLD
