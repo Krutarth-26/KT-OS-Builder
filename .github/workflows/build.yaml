@@ -1,9 +1,118 @@
-name: Test Dispatch
+name: KTOS FINAL FLASHABLE
+
 on:
   workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  build_flashable_rom:
+    runs-on: ubuntu-22.04
+
     steps:
-      - run: echo "Workflow running!"
+      # -------------------------
+      # Checkout repository
+      # -------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -------------------------
+      # Install required tools
+      # -------------------------
+      - name: Install Tools
+        run: |
+          sudo apt update
+          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs git
+
+      # -------------------------
+      # Download base ROM
+      # -------------------------
+      - name: Download Base ROM
+        run: |
+          mkdir -p rom
+          cd rom
+          wget -c -O base_rom.zip "https://downloads.sourceforge.net/project/ajhut/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip"
+          unzip -q base_rom.zip
+          cd ..
+
+      # -------------------------
+      # Convert system image
+      # -------------------------
+      - name: Convert System Image
+        run: |
+          cd rom
+          git clone https://github.com/xpirt/sdat2img.git
+          brotli --decompress system.new.dat.br -o system.new.dat
+          python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
+          mkdir system_raw
+          sudo mount -o loop system.img system_raw
+          mkdir system
+          sudo cp -r system_raw/* system/
+          sudo umount system_raw
+          cd ..
+
+      # -------------------------
+      # Clean system folder
+      # -------------------------
+      - name: Clean System
+        run: |
+          sudo rm -rf system/dev system/proc system/sys system/mnt system/lost+found system/efs system/ramdisk system/post-install
+
+      # -------------------------
+      # Inject Aurora Store
+      # -------------------------
+      - name: Inject Aurora Store
+        run: |
+          sudo mkdir -p system/priv-app/AuroraStore
+          sudo cp prebuilt/AuroraStore.apk system/priv-app/AuroraStore/AuroraStore.apk
+
+      # -------------------------
+      # Apply Boot Animation
+      # -------------------------
+      - name: Apply Boot Animation
+        run: |
+          mkdir -p system/media
+          cp prebuilt/kt_boot.mp4 system/media/
+          cd system/media
+          mkdir frames
+          ffmpeg -i kt_boot.mp4 -vf "fps=24,scale=720:1280" frames/frame_%04d.png
+          mkdir bootanimation
+          mkdir bootanimation/part0
+          cp frames/*.png bootanimation/part0/
+          echo "720 1280 24" > bootanimation/desc.txt
+          echo "p 0 0 part0" >> bootanimation/desc.txt
+          zip -r ../bootanimation.zip bootanimation
+          mv ../bootanimation.zip ../bootanimation_final.zip
+          cd ../../..
+          cp system/media/bootanimation_final.zip system/media/bootanimation.zip
+
+      # -------------------------
+      # Prepare flashable zip
+      # -------------------------
+      - name: Prepare Flashable Zip
+        run: |
+          mkdir -p flashable/system
+          cp -r system/* flashable/system/
+          mkdir -p flashable/META-INF/com/google/android
+          cat > flashable/META-INF/com/google/android/updater-script <<'EOF'
+ui_print("Flashing KTOS System...");
+delete("/system");
+package_extract_dir("system", "/system");
+ui_print("System flash done.");
+EOF
+
+      # -------------------------
+      # Create final zip
+      # -------------------------
+      - name: Create Final Flashable ZIP
+        run: |
+          cd flashable
+          zip -r ../KTOS-FINAL.zip META-INF system
+          cd ..
+
+      # -------------------------
+      # Upload artifact
+      # -------------------------
+      - name: Upload Flashable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: KTOS-FINAL
+          path: KTOS-FINAL.zip
