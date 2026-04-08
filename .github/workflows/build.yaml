@@ -70,6 +70,7 @@ jobs:
       - name: Fix Permissions
         run: |
           sudo chmod -R 755 rom/system/system
+          sudo chown -R $USER:$USER rom/system/system
 
       # -------------------------
       # CREATE BOOTANIMATION
@@ -113,7 +114,7 @@ jobs:
       - name: Repack ROM
         run: |
           cd rom
-          zip -r ../KTOS-FINAL.zip *
+          zip -r ../KTOS-FINAL.zip system boot -x "system_raw/*"
 
       # -------------------------
       # UPLOAD RESULT
