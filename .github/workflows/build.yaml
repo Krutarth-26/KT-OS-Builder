@@ -6,18 +6,25 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      # 1️⃣ Checkout repo
+      # -------------------------
+      # Checkout repository
+      # -------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2️⃣ Install tools
+      # -------------------------
+      # Install required tools
+      # -------------------------
       - name: Install Tools
         run: |
           sudo apt update
-          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs git
+          sudo apt install -y unzip zip ffmpeg
 
-      # 3️⃣ Download base ROM
+      # -------------------------
+      # Download base ROM
+      # -------------------------
       - name: Download Base ROM
         run: |
           mkdir -p rom
@@ -26,36 +33,22 @@ jobs:
           unzip -q base_rom.zip
           cd ..
 
-      # 4️⃣ Convert system image
-      - name: Convert System Image
-        run: |
-          git clone https://github.com/xpirt/sdat2img.git sdat2img
-          brotli --decompress rom/system.new.dat.br -o rom/system.new.dat
-          python3 sdat2img/sdat2img.py rom/system.transfer.list rom/system.new.dat rom/system.img
-          mkdir system_raw
-          sudo mount -o loop rom/system.img system_raw
-          mkdir system
-          sudo cp -r system_raw/* system/
-          sudo umount system_raw
-          rm -rf system_raw sdat2img
-
-      # 5️⃣ Clean unnecessary folders
-      - name: Clean System
-        run: |
-          sudo rm -rf system/dev system/proc system/sys system/mnt system/lost+found system/efs system/ramdisk system/post-install
-
-      # 6️⃣ Inject Aurora Store
+      # -------------------------
+      # Inject Aurora Store
+      # -------------------------
       - name: Inject Aurora Store
         run: |
-          sudo mkdir -p system/priv-app/AuroraStore
-          sudo cp prebuilt/AuroraStore.apk system/priv-app/AuroraStore/AuroraStore.apk
+          mkdir -p rom/system/priv-app/AuroraStore
+          cp prebuilt/AuroraStore.apk rom/system/priv-app/AuroraStore/AuroraStore.apk
 
-      # 7️⃣ Apply Boot Animation
+      # -------------------------
+      # Apply Boot Animation
+      # -------------------------
       - name: Apply Boot Animation
         run: |
-          mkdir -p system/media
-          cp prebuilt/kt_boot.mp4 system/media/
-          cd system/media
+          mkdir -p rom/system/media
+          cp prebuilt/kt_boot.mp4 rom/system/media/
+          cd rom/system/media
           mkdir frames
           ffmpeg -i kt_boot.mp4 -vf "fps=24,scale=720:1280" frames/frame_%04d.png
           mkdir bootanimation
@@ -66,29 +59,20 @@ jobs:
           zip -r ../bootanimation.zip bootanimation
           mv ../bootanimation.zip ../bootanimation_final.zip
           cd ../../..
-          cp system/media/bootanimation_final.zip system/media/bootanimation.zip
+          cp rom/system/media/bootanimation_final.zip rom/system/media/bootanimation.zip
 
-      # 8️⃣ Prepare Flashable ZIP
-      - name: Prepare Flashable ZIP
+      # -------------------------
+      # Create final flashable ZIP
+      # -------------------------
+      - name: Create Flashable ZIP
         run: |
-          mkdir -p flashable/system
-          cp -r system/* flashable/system/
-          mkdir -p flashable/META-INF/com/google/android
-          cat > flashable/META-INF/com/google/android/updater-script <<'EOF'
-ui_print("Flashing KTOS System...");
-delete("/system");
-package_extract_dir("system", "/system");
-ui_print("System flash done.");
-EOF
-
-      # 9️⃣ Create final flashable ZIP
-      - name: Create Final Flashable ZIP
-        run: |
-          cd flashable
-          zip -r ../KTOS-FINAL.zip META-INF system
+          cd rom
+          zip -r ../KTOS-FINAL.zip system
           cd ..
 
-      # 🔟 Upload artifact
+      # -------------------------
+      # Upload artifact
+      # -------------------------
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
         with:
