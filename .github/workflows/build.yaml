@@ -20,7 +20,7 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt update
-          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs
+          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs git
 
       # -------------------------
       # DOWNLOAD BASE ROM
@@ -61,15 +61,15 @@ jobs:
       # -------------------------
       - name: Inject Aurora Store
         run: |
-          mkdir -p rom/system/system/priv-app/AuroraStore
-          cp prebuilt/AuroraStore.apk rom/system/system/priv-app/AuroraStore/AuroraStore.apk
+          sudo mkdir -p rom/system/system/priv-app/AuroraStore
+          sudo cp prebuilt/AuroraStore.apk rom/system/system/priv-app/AuroraStore/AuroraStore.apk
 
       # -------------------------
       # FIX PERMISSIONS
       # -------------------------
       - name: Fix Permissions
         run: |
-          chmod -R 755 rom/system/system
+          sudo chmod -R 755 rom/system/system
 
       # -------------------------
       # CREATE BOOTANIMATION
@@ -97,7 +97,7 @@ jobs:
       # -------------------------
       - name: Apply Bootanimation
         run: |
-          cp bootanimation.zip rom/system/system/media/bootanimation.zip
+          sudo cp bootanimation.zip rom/system/system/media/bootanimation.zip
 
       # -------------------------
       # CLEAN FILES
