@@ -1,4 +1,4 @@
-name: KT OS Hardened Final Pipeline (ha3g Exynos)
+name: KT OS FINAL MASTER (SAFE + MICROG READY)
 
 on:
   workflow_dispatch:
@@ -8,107 +8,207 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 1. Environment & Tool Preparation
+
+# -----------------------------
+# 1. ENV SETUP
+# -----------------------------
+      - name: Setup Environment
         run: |
+          set -e
           sudo apt-get update
-          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq android-sdk-libsparse-utils
+          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq xz-utils android-sdk-libsparse-utils
+
           git clone https://github.com/xpirt/sdat2img.git
           git clone https://github.com/xpirt/img2sdat.git
-          sudo chmod -R 777 sdat2img/ img2sdat/
+          chmod -R +x sdat2img img2sdat
 
-      - name: 2. Robust Source Acquisition
+# -----------------------------
+# 2. DOWNLOAD ROM
+# -----------------------------
+      - name: Download ROM
         run: |
-          # Robust download with retries and timeout handling
-          # Using a high-bandwidth mirror to avoid 'Exit Code 4'
-          MAX_RETRIES=3
-          URL="https://master.dl.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip"
-          
-          for i in $(seq 1 $MAX_RETRIES); do
-            wget -t 5 -w 5 --connect-timeout=30 --random-wait -q "$URL" -O rom.zip && break || sleep 15
-            if [ $i -eq $MAX_RETRIES ]; then echo "FATAL: Download failed after $MAX_RETRIES attempts"; exit 1; fi
+          set -e
+          URL="https://downloads.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip"
+
+          for i in {1..5}; do
+            curl -L -A "Mozilla/5.0" "$URL" -o rom.zip && break
+            echo "Retry $i..."
+            sleep 3
           done
 
-          mkdir -p rom_workspace
-          unzip -o -q rom.zip -d rom_workspace/ && sync
-          
-          # Discover critical block files
-          echo "DAT_PATH=$(find rom_workspace -name 'system.new.dat*' | head -n 1)" >> $GITHUB_ENV
-          echo "LIST_PATH=$(find rom_workspace -name 'system.transfer.list' | head -n 1)" >> $GITHUB_ENV
-          
-          # Universal Security Map Discovery
-          MAP_FILE=$(find . -name "file_contexts" | head -n 1)
-          if [ -n "$MAP_FILE" ]; then
-            cp "$MAP_FILE" ${GITHUB_WORKSPACE}/file_contexts
-            sed -i 's/\r$//' ${GITHUB_WORKSPACE}/file_contexts
-          else
-            # Emergency Fallback to official LineageOS 18.1 map if file is missing
-            curl -sL "https://raw.githubusercontent.com/LineageOS/android_system_sepolicy/lineage-18.1/private/file_contexts" -o ${GITHUB_WORKSPACE}/file_contexts
-          fi
-
-      - name: 3. Block-Level System Reconstruction
-        run: |
-          if [[ "$DAT_PATH" == *.br ]]; then
-            brotli -d "$DAT_PATH"
-            DAT_PATH="${DAT_PATH%.br}"
-          fi
+          mkdir rom_workspace
+          unzip -q rom.zip -d rom_workspace
           sync
-          python3 ${GITHUB_WORKSPACE}/sdat2img/sdat2img.py "$LIST_PATH" "$DAT_PATH" system.img
+
+# -----------------------------
+# 3. DETECT FILES
+# -----------------------------
+      - name: Detect System Files
+        run: |
+          set -e
+
+          DAT=$(find rom_workspace -name "system.new.dat*" | head -n1)
+          LIST=$(find rom_workspace -name "system.transfer.list" | head -n1)
+
+          if [ -z "$DAT" ] || [ -z "$LIST" ]; then
+            echo "❌ system files missing"
+            exit 1
+          fi
+
+          echo "DAT=$DAT" >> $GITHUB_ENV
+          echo "LIST=$LIST" >> $GITHUB_ENV
+
+# -----------------------------
+# 4. BUILD SYSTEM IMG
+# -----------------------------
+      - name: Convert to system.img
+        run: |
+          set -e
+
+          FILE="$DAT"
+
+          if [[ "$FILE" == *.br ]]; then
+            brotli -d "$FILE"
+            FILE="${FILE%.br}"
+          elif [[ "$FILE" == *.xz ]]; then
+            xz -d "$FILE"
+            FILE="${FILE%.xz}"
+          fi
+
+          python3 sdat2img/sdat2img.py "$LIST" "$FILE" system.img
+
+# -----------------------------
+# 5. MOUNT SYSTEM SAFE
+# -----------------------------
+      - name: Mount System
+        run: |
+          set -e
+
           mkdir mnt
-          sudo mount -t ext4 -o loop system.img mnt
+          sudo mount -o loop system.img mnt || exit 1
+          sudo mount -o remount,rw mnt
 
-      - name: 4. Strategic Injection & Permission Hardening
-        run: |
-          # Locate the internal system folder (Handles A/B or Non-A/B)
-          TARGET=$(find mnt -type d -path "*/system/app" | head -n 1 | sed 's|/app||')
-          
-          sudo mkdir -p $TARGET/priv-app/KT_Store $TARGET/app/KT_Launcher
-          
-          # APK Downloads
-          sudo curl -L "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" -o $TARGET/priv-app/KT_Store/KT_Store.apk
-          sudo curl -L "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" -o $TARGET/app/KT_Launcher/KT_Launcher.apk
-          
-          # Permission Handshake
-          sudo chmod 644 $TARGET/priv-app/KT_Store/*.apk $TARGET/app/KT_Launcher/*.apk
-          sudo chown -R 0:0 $TARGET/priv-app $TARGET/app
+          if [ -d "mnt/system" ]; then
+            ROOT="mnt/system"
+          else
+            ROOT="mnt"
+          fi
 
-      - name: 5. Display & Audio Engine Calibration
+          echo "ROOT=$ROOT" >> $GITHUB_ENV
+
+# -----------------------------
+# 6. APP + MICROG INJECTION
+# -----------------------------
+      - name: Inject Apps (SAFE)
         run: |
+          set -e
+
+          APP="$ROOT/app"
+          PRIV="$ROOT/priv-app"
+
+          sudo mkdir -p $PRIV/KT_Store
+          sudo mkdir -p $APP/KT_Launcher
+          sudo mkdir -p $PRIV/KT_MicroG
+
+          retry() {
+            for i in {1..5}; do
+              curl -L "$1" -o "$2" && return 0
+              sleep 2
+            done
+            return 1
+          }
+
+          retry "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" "$PRIV/KT_Store/KT_Store.apk"
+          retry "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" "$APP/KT_Launcher/KT_Launcher.apk"
+          retry "https://github.com/microg/GmsCore/releases/latest/download/GmsCore.apk" "$PRIV/KT_MicroG/KT_MicroG.apk"
+
+          sudo chmod 644 $PRIV/KT_Store/*.apk $APP/KT_Launcher/*.apk $PRIV/KT_MicroG/*.apk
+          sudo chown -R root:root $PRIV $APP
+
+          # SAFE PERMISSIONS FIX
+          sudo find $APP -type d -exec chmod 755 {} \;
+          sudo find $APP -type f -exec chmod 644 {} \;
+
+          sudo find $PRIV -type d -exec chmod 755 {} \;
+          sudo find $PRIV -type f -exec chmod 644 {} \;
+
+# -----------------------------
+# 6.5 MICROG PREP (SAFE)
+# -----------------------------
+      - name: MicroG Preparation
+        run: |
+          set -e
+
+          sudo mkdir -p $ROOT/etc/permissions
+
+          sudo bash -c "cat > $ROOT/etc/permissions/microg.xml <<EOF
+<permissions>
+    <permission name=\"android.permission.FAKE_PACKAGE_SIGNATURE\" />
+</permissions>
+EOF"
+
+# -----------------------------
+# 7. BOOTANIMATION ONLY (SAFE)
+# -----------------------------
+      - name: Bootanimation
+        run: |
+          set -e
+
           if [ -f "kt_boot.mp4" ]; then
             mkdir -p work/part0
-            ffmpeg -i kt_boot.mp4 -vn -c:a libvorbis work/PowerOn.ogg
+
             ffmpeg -i kt_boot.mp4 -vf "scale=1080:1920,fps=30" work/part0/%03d.png
             echo -e "1080 1920 30\np 1 0 part0" > work/desc.txt
             (cd work && zip -r0 bootanimation.zip part0 desc.txt)
-            
-            MEDIA=$(find mnt -type d -path "*/media" | head -n 1)
-            sudo mkdir -p $MEDIA/audio/ui
-            sudo cp work/bootanimation.zip $MEDIA/
-            sudo cp work/PowerOn.ogg $MEDIA/audio/ui/
-            
-            BPROP=$(sudo find mnt -name "build.prop" | head -n 1)
-            sudo bash -c "echo 'persist.sys.bootanim.play_sound=1' >> $BPROP"
+
+            sudo cp work/bootanimation.zip $ROOT/media/
           fi
 
-      - name: 6. Repacking & Hardware Handshake
+# -----------------------------
+# 8. REPACK SYSTEM SAFE
+# -----------------------------
+      - name: Repack
         run: |
-          sync && sudo umount -l mnt
+          set -e
+
+          if [ ! -f "$ROOT/build.prop" ]; then
+            echo "❌ SYSTEM BROKEN"
+            exit 1
+          fi
+
+          sync
+          sleep 2
+          sudo fuser -km mnt || true
+          sudo umount -l mnt
+
           img2simg system.img system_sparse.img
-          
-          # Restoring security map - This fixes the black screen issue
-          python3 ${GITHUB_WORKSPACE}/img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system -c ${GITHUB_WORKSPACE}/file_contexts
-          
+
+          python3 img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system
+
           brotli -q 6 system.new.dat -o system.new.dat.br
+
           rm -f system.img system_sparse.img system.new.dat
 
-      - name: 7. Final Package Generation (v1_GOLD)
+# -----------------------------
+# 9. FINAL ZIP
+# -----------------------------
+      - name: Build Final ZIP
         run: |
-          # Clean old files and swap with modified KT OS files
-          rm -f rom_workspace/system.new.dat* rom_workspace/system.transfer.list
-          cp system.new.dat.br system.transfer.list rom_workspace/
-          cd rom_workspace && zip -r ../KT_OS_GOLD.zip .
+          set -e
 
-      - name: 8. Deliver Final Build
+          rm -f rom_workspace/system.new.dat*
+          rm -f rom_workspace/system.transfer.list
+
+          cp system.new.dat.br system.transfer.list rom_workspace/
+
+          cd rom_workspace
+          zip -r9 ../KT_OS_FINAL.zip .
+
+# -----------------------------
+# 10. UPLOAD
+# -----------------------------
+      - name: Upload ROM
         uses: actions/upload-artifact@v4
         with:
-          name: KT_OS_GOLD
-          path: KT_OS_GOLD.zip
+          name: KT_OS_FINAL
+          path: KT_OS_FINAL.zip
