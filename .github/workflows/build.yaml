@@ -1,21 +1,21 @@
-name: KTOS FINAL STABLE (FLASHABLE)
+name: KTOS FINAL FLASHABLE
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build_flashable_rom:
     runs-on: ubuntu-22.04
 
     steps:
       # -------------------------
-      # CHECKOUT REPO
+      # Checkout Repo
       # -------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
       # -------------------------
-      # INSTALL TOOLS
+      # Install Required Tools
       # -------------------------
       - name: Install Tools
         run: |
@@ -23,7 +23,7 @@ jobs:
           sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs
 
       # -------------------------
-      # DOWNLOAD BASE ROM
+      # Download Base ROM
       # -------------------------
       - name: Download Base ROM
         run: |
@@ -34,9 +34,9 @@ jobs:
           cd ..
 
       # -------------------------
-      # CONVERT SYSTEM IMAGE
+      # Convert system image
       # -------------------------
-      - name: Convert system
+      - name: Convert System
         run: |
           cd rom
           git clone https://github.com/xpirt/sdat2img.git
@@ -46,18 +46,18 @@ jobs:
           sudo mount -o loop system.img system_raw
           mkdir system
           sudo cp -r system_raw/* system/
+          sudo umount system_raw
           cd ..
 
       # -------------------------
-      # CLEAN SYSTEM FOLDER
+      # Clean unnecessary folders
       # -------------------------
-      - name: Clean System Folders
+      - name: Clean System
         run: |
-          # Remove folders that break recovery flash
           sudo rm -rf system/dev system/proc system/sys system/mnt system/lost+found system/efs system/ramdisk system/post-install
 
       # -------------------------
-      # INJECT AURORA STORE
+      # Inject Aurora Store
       # -------------------------
       - name: Inject Aurora Store
         run: |
@@ -65,7 +65,7 @@ jobs:
           sudo cp prebuilt/AuroraStore.apk system/priv-app/AuroraStore/AuroraStore.apk
 
       # -------------------------
-      # APPLY BOOTANIMATION
+      # Apply Boot Animation
       # -------------------------
       - name: Apply Bootanimation
         run: |
@@ -85,7 +85,7 @@ jobs:
           cp system/media/bootanimation_final.zip system/media/bootanimation.zip
 
       # -------------------------
-      # CREATE FLASHABLE ZIP STRUCTURE
+      # Prepare Flashable Zip Structure
       # -------------------------
       - name: Prepare Flashable Zip
         run: |
@@ -100,7 +100,7 @@ ui_print("System flash done.");
 EOF
 
       # -------------------------
-      # CREATE FINAL ZIP
+      # Create Final Flashable ZIP
       # -------------------------
       - name: Create Final Flashable ZIP
         run: |
@@ -109,7 +109,7 @@ EOF
           cd ..
 
       # -------------------------
-      # UPLOAD RESULT
+      # Upload Result
       # -------------------------
       - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
