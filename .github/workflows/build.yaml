@@ -1,4 +1,4 @@
-name: KTOS FINAL BUILD (FIXED)
+name: KTOS FINAL STABLE (BOOT SAFE)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt update
-          sudo apt install -y unzip zip ffmpeg openjdk-8-jdk brotli python3 e2fsprogs
+          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs
 
       # -------------------------
       # DOWNLOAD BASE ROM
@@ -33,88 +33,36 @@ jobs:
           unzip base_rom.zip
 
       # -------------------------
-      # CONVERT SYSTEM IMAGE (FIXED)
+      # CONVERT SYSTEM IMAGE
       # -------------------------
       - name: Convert system
         run: |
           cd rom
 
-          # Clone tool
+          # Get conversion tool
           git clone https://github.com/xpirt/sdat2img.git
 
-          # Step 1: Decompress FIRST
+          # Decompress .br → .dat
           brotli --decompress system.new.dat.br -o system.new.dat
 
-          # Step 2: Convert to IMG
+          # Convert to IMG
           python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
 
-          # Step 3: Mount system
+          # Mount system
           mkdir system_raw
           sudo mount -o loop system.img system_raw
 
-          # Step 4: Copy system files
+          # Copy system files
           mkdir system
           sudo cp -r system_raw/* system/
 
       # -------------------------
-      # BUILD KT AI APP
+      # ADD AURORA STORE (ONLY SAFE APP)
       # -------------------------
-      - name: Build KT App
-        run: |
-          mkdir ktapp
-          cd ktapp
-
-          mkdir -p src/com/kt/search
-
-          cat <<EOF > src/com/kt/search/MainActivity.java
-          package com.kt.search;
-
-          import android.app.Activity;
-          import android.os.Bundle;
-          import android.content.Intent;
-          import android.net.Uri;
-
-          public class MainActivity extends Activity {
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-                  try {
-                      Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://lens.google.com"));
-                      startActivity(i);
-                  } catch (Exception e) {}
-                  finish();
-              }
-          }
-          EOF
-
-          cat <<EOF > AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.kt.search">
-              <application android:label="KT Circle Search">
-                  <activity android:name=".MainActivity">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
-          mkdir build
-          javac -source 1.8 -target 1.8 -d build src/com/kt/search/MainActivity.java
-          jar cvf KTSearch.apk -C build .
-
-      # -------------------------
-      # ADD SYSTEM APPS
-      # -------------------------
-      - name: Inject Apps
+      - name: Inject Aurora Store
         run: |
           mkdir -p rom/system/system/priv-app/AuroraStore
           cp prebuilt/AuroraStore.apk rom/system/system/priv-app/AuroraStore/AuroraStore.apk
-
-          mkdir -p rom/system/system/priv-app/KTSearch
-          cp ktapp/KTSearch.apk rom/system/system/priv-app/KTSearch/KTSearch.apk
 
       # -------------------------
       # FIX PERMISSIONS
@@ -152,15 +100,7 @@ jobs:
           cp bootanimation.zip rom/system/system/media/bootanimation.zip
 
       # -------------------------
-      # REPACK SYSTEM
-      # -------------------------
-      - name: Repack System
-        run: |
-          cd rom
-          sudo make_ext4fs -s -l 2147483648 -a system new_system.img system
-
-      # -------------------------
-      # CLEAN OLD FILES
+      # CLEAN FILES
       # -------------------------
       - name: Cleanup
         run: |
@@ -168,7 +108,7 @@ jobs:
           rm -f system.new.dat system.new.dat.br system.transfer.list system.img
 
       # -------------------------
-      # REPACK ROM ZIP
+      # REPACK FINAL ROM
       # -------------------------
       - name: Repack ROM
         run: |
