@@ -38,8 +38,6 @@ jobs:
       - name: Convert system
         run: |
           cd rom
-
-          # Get conversion tool
           git clone https://github.com/xpirt/sdat2img.git
 
           # Decompress .br → .dat
@@ -109,12 +107,15 @@ jobs:
           rm -f system.new.dat system.new.dat.br system.transfer.list system.img
 
       # -------------------------
-      # REPACK FINAL ROM
+      # REPACK FINAL ROM (FIXED)
       # -------------------------
       - name: Repack ROM
         run: |
           cd rom
-          zip -r ../KTOS-FINAL.zip system boot -x "system_raw/*"
+          # Ensure all files readable by runner
+          sudo chown -R $USER:$USER system
+          # Zip system and boot folders; skip mount points & volatile folders
+          zip -r ../KTOS-FINAL.zip system boot -x "system_raw/*" -x "system/cache/*" -x "system/persist/*"
 
       # -------------------------
       # UPLOAD RESULT
