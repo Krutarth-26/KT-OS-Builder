@@ -1,4 +1,4 @@
-name: KTOS FINAL STABLE (BOOT SAFE)
+name: KTOS FINAL STABLE (FLASHABLE)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
 
     steps:
       # -------------------------
-      # CHECKOUT
+      # CHECKOUT REPO
       # -------------------------
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,17 +20,18 @@ jobs:
       - name: Install Tools
         run: |
           sudo apt update
-          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs git
+          sudo apt install -y unzip zip ffmpeg brotli python3 e2fsprogs
 
       # -------------------------
       # DOWNLOAD BASE ROM
       # -------------------------
       - name: Download Base ROM
         run: |
-          mkdir rom
+          mkdir -p rom
           cd rom
-          wget https://downloads.sourceforge.net/project/ajhut/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip -O base_rom.zip
-          unzip base_rom.zip
+          wget -c -O base_rom.zip "https://downloads.sourceforge.net/project/ajhut/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip"
+          unzip -q base_rom.zip
+          cd ..
 
       # -------------------------
       # CONVERT SYSTEM IMAGE
@@ -39,88 +40,78 @@ jobs:
         run: |
           cd rom
           git clone https://github.com/xpirt/sdat2img.git
-
-          # Decompress .br → .dat
           brotli --decompress system.new.dat.br -o system.new.dat
-
-          # Convert to IMG
           python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
-
-          # Mount system
           mkdir system_raw
           sudo mount -o loop system.img system_raw
-
-          # Copy system files
           mkdir system
           sudo cp -r system_raw/* system/
+          cd ..
 
       # -------------------------
-      # ADD AURORA STORE (ONLY SAFE APP)
+      # CLEAN SYSTEM FOLDER
+      # -------------------------
+      - name: Clean System Folders
+        run: |
+          # Remove folders that break recovery flash
+          sudo rm -rf system/dev system/proc system/sys system/mnt system/lost+found system/efs system/ramdisk system/post-install
+
+      # -------------------------
+      # INJECT AURORA STORE
       # -------------------------
       - name: Inject Aurora Store
         run: |
-          sudo mkdir -p rom/system/system/priv-app/AuroraStore
-          sudo cp prebuilt/AuroraStore.apk rom/system/system/priv-app/AuroraStore/AuroraStore.apk
-
-      # -------------------------
-      # FIX PERMISSIONS
-      # -------------------------
-      - name: Fix Permissions
-        run: |
-          sudo chmod -R 755 rom/system/system
-          sudo chown -R $USER:$USER rom/system/system
-
-      # -------------------------
-      # CREATE BOOTANIMATION
-      # -------------------------
-      - name: Create Bootanimation
-        run: |
-          mkdir boot
-          cp prebuilt/kt_boot.mp4 boot/
-          cd boot
-
-          mkdir frames
-          ffmpeg -i kt_boot.mp4 -vf "fps=24,scale=720:1280" frames/frame_%04d.png
-
-          mkdir -p bootanimation/part0
-          cp frames/*.png bootanimation/part0/
-
-          echo "720 1280 24" > bootanimation/desc.txt
-          echo "p 0 0 part0" >> bootanimation/desc.txt
-
-          cd bootanimation
-          zip -r ../../bootanimation.zip .
+          sudo mkdir -p system/priv-app/AuroraStore
+          sudo cp prebuilt/AuroraStore.apk system/priv-app/AuroraStore/AuroraStore.apk
 
       # -------------------------
       # APPLY BOOTANIMATION
       # -------------------------
       - name: Apply Bootanimation
         run: |
-          sudo cp bootanimation.zip rom/system/system/media/bootanimation.zip
+          mkdir -p system/media
+          cp prebuilt/kt_boot.mp4 system/media/
+          cd system/media
+          mkdir frames
+          ffmpeg -i kt_boot.mp4 -vf "fps=24,scale=720:1280" frames/frame_%04d.png
+          mkdir bootanimation
+          mkdir bootanimation/part0
+          cp frames/*.png bootanimation/part0/
+          echo "720 1280 24" > bootanimation/desc.txt
+          echo "p 0 0 part0" >> bootanimation/desc.txt
+          zip -r ../bootanimation.zip bootanimation
+          mv ../bootanimation.zip ../bootanimation_final.zip
+          cd ../../..
+          cp system/media/bootanimation_final.zip system/media/bootanimation.zip
 
       # -------------------------
-      # CLEAN FILES
+      # CREATE FLASHABLE ZIP STRUCTURE
       # -------------------------
-      - name: Cleanup
+      - name: Prepare Flashable Zip
         run: |
-          cd rom
-          rm -f system.new.dat system.new.dat.br system.transfer.list system.img
+          mkdir -p flashable/system
+          cp -r system/* flashable/system/
+          mkdir -p flashable/META-INF/com/google/android
+          cat > flashable/META-INF/com/google/android/updater-script <<'EOF'
+ui_print("Flashing KTOS System...");
+delete("/system");
+package_extract_dir("system", "/system");
+ui_print("System flash done.");
+EOF
 
       # -------------------------
-      # REPACK FINAL ROM (FIXED)
+      # CREATE FINAL ZIP
       # -------------------------
-      - name: Repack ROM
+      - name: Create Final Flashable ZIP
         run: |
-          cd rom
-          # Ensure all files readable by runner
-          sudo chown -R $USER:$USER system
-          # Zip system and boot folders; skip mount points & volatile folders
-          zip -r ../KTOS-FINAL.zip system boot -x "system_raw/*" -x "system/cache/*" -x "system/persist/*"
+          cd flashable
+          zip -r ../KTOS-FINAL.zip META-INF system
+          cd ..
 
       # -------------------------
       # UPLOAD RESULT
       # -------------------------
-      - name: Upload
+      - name: Upload Flashable ZIP
         uses: actions/upload-artifact@v4
         with:
           name: KTOS-FINAL
