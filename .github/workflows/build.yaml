@@ -1,4 +1,4 @@
-name: KT OS FINAL MASTER (SAFE + MICROG READY)
+name: KT OS FINAL MASTER
 
 on:
   workflow_dispatch:
@@ -6,208 +6,57 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-# -----------------------------
-# 1. ENV SETUP
-# -----------------------------
-      - name: Setup Environment
+      - name: Install Tools
         run: |
-          set -e
           sudo apt-get update
-          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs ffmpeg curl jq xz-utils android-sdk-libsparse-utils
-
+          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs android-sdk-libsparse-utils
           git clone https://github.com/xpirt/sdat2img.git
           git clone https://github.com/xpirt/img2sdat.git
           chmod -R +x sdat2img img2sdat
 
-# -----------------------------
-# 2. DOWNLOAD ROM
-# -----------------------------
-      - name: Download ROM
+      - name: Process ROM
         run: |
-          set -e
+          # 1. Download ROM
           URL="https://downloads.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip"
-
-          for i in {1..5}; do
-            curl -L -A "Mozilla/5.0" "$URL" -o rom.zip && break
-            echo "Retry $i..."
-            sleep 3
-          done
-
-          mkdir rom_workspace
+          wget -q $URL -o rom.zip
           unzip -q rom.zip -d rom_workspace
-          sync
 
-# -----------------------------
-# 3. DETECT FILES
-# -----------------------------
-      - name: Detect System Files
-        run: |
-          set -e
+          # 2. Extract System
+          DAT=$(find rom_workspace -name "system.new.dat.br")
+          LIST=$(find rom_workspace -name "system.transfer.list")
+          brotli -d "$DAT"
+          python3 sdat2img/sdat2img.py "$LIST" "${DAT%.br}" system.img
 
-          DAT=$(find rom_workspace -name "system.new.dat*" | head -n1)
-          LIST=$(find rom_workspace -name "system.transfer.list" | head -n1)
-
-          if [ -z "$DAT" ] || [ -z "$LIST" ]; then
-            echo "❌ system files missing"
-            exit 1
-          fi
-
-          echo "DAT=$DAT" >> $GITHUB_ENV
-          echo "LIST=$LIST" >> $GITHUB_ENV
-
-# -----------------------------
-# 4. BUILD SYSTEM IMG
-# -----------------------------
-      - name: Convert to system.img
-        run: |
-          set -e
-
-          FILE="$DAT"
-
-          if [[ "$FILE" == *.br ]]; then
-            brotli -d "$FILE"
-            FILE="${FILE%.br}"
-          elif [[ "$FILE" == *.xz ]]; then
-            xz -d "$FILE"
-            FILE="${FILE%.xz}"
-          fi
-
-          python3 sdat2img/sdat2img.py "$LIST" "$FILE" system.img
-
-# -----------------------------
-# 5. MOUNT SYSTEM SAFE
-# -----------------------------
-      - name: Mount System
-        run: |
-          set -e
-
+          # 3. Mount and Inject MicroG (The KT OS Secret Sauce)
           mkdir mnt
-          sudo mount -o loop system.img mnt || exit 1
-          sudo mount -o remount,rw mnt
+          sudo mount -o loop system.img mnt
+          sudo mkdir -p mnt/system/priv-app/KT_MicroG
+          sudo wget -q "https://github.com/microg/GmsCore/releases/latest/download/GmsCore.apk" -O mnt/system/priv-app/KT_MicroG/KT_MicroG.apk
+          sudo chmod 644 mnt/system/priv-app/KT_MicroG/KT_MicroG.apk
+          
+          # Add Permission Whitelist for Spoofing
+          sudo mkdir -p mnt/system/etc/permissions
+          sudo bash -c "cat > mnt/system/etc/permissions/microg.xml <<EOF
+          <permissions>
+              <permission name=\"android.permission.FAKE_PACKAGE_SIGNATURE\" />
+          </permissions>
+          EOF"
 
-          if [ -d "mnt/system" ]; then
-            ROOT="mnt/system"
-          else
-            ROOT="mnt"
-          fi
-
-          echo "ROOT=$ROOT" >> $GITHUB_ENV
-
-# -----------------------------
-# 6. APP + MICROG INJECTION
-# -----------------------------
-      - name: Inject Apps (SAFE)
-        run: |
-          set -e
-
-          APP="$ROOT/app"
-          PRIV="$ROOT/priv-app"
-
-          sudo mkdir -p $PRIV/KT_Store
-          sudo mkdir -p $APP/KT_Launcher
-          sudo mkdir -p $PRIV/KT_MicroG
-
-          retry() {
-            for i in {1..5}; do
-              curl -L "$1" -o "$2" && return 0
-              sleep 2
-            done
-            return 1
-          }
-
-          retry "https://gitlab.com/AuroraOSS/AuroraStore/-/releases/permalink/latest/downloads/AuroraStore.apk" "$PRIV/KT_Store/KT_Store.apk"
-          retry "https://github.com/LawnchairLauncher/lawnchair/releases/download/v12.1.0-alpha.4/Lawnchair-12.1.0-Alpha-4.apk" "$APP/KT_Launcher/KT_Launcher.apk"
-          retry "https://github.com/microg/GmsCore/releases/latest/download/GmsCore.apk" "$PRIV/KT_MicroG/KT_MicroG.apk"
-
-          sudo chmod 644 $PRIV/KT_Store/*.apk $APP/KT_Launcher/*.apk $PRIV/KT_MicroG/*.apk
-          sudo chown -R root:root $PRIV $APP
-
-          # SAFE PERMISSIONS FIX
-          sudo find $APP -type d -exec chmod 755 {} \;
-          sudo find $APP -type f -exec chmod 644 {} \;
-
-          sudo find $PRIV -type d -exec chmod 755 {} \;
-          sudo find $PRIV -type f -exec chmod 644 {} \;
-
-# -----------------------------
-# 6.5 MICROG PREP (SAFE)
-# -----------------------------
-      - name: MicroG Preparation
-        run: |
-          set -e
-
-          sudo mkdir -p $ROOT/etc/permissions
-
-          sudo bash -c "cat > $ROOT/etc/permissions/microg.xml <<EOF
-<permissions>
-    <permission name=\"android.permission.FAKE_PACKAGE_SIGNATURE\" />
-</permissions>
-EOF"
-
-# -----------------------------
-# 7. BOOTANIMATION ONLY (SAFE)
-# -----------------------------
-      - name: Bootanimation
-        run: |
-          set -e
-
-          if [ -f "kt_boot.mp4" ]; then
-            mkdir -p work/part0
-
-            ffmpeg -i kt_boot.mp4 -vf "scale=1080:1920,fps=30" work/part0/%03d.png
-            echo -e "1080 1920 30\np 1 0 part0" > work/desc.txt
-            (cd work && zip -r0 bootanimation.zip part0 desc.txt)
-
-            sudo cp work/bootanimation.zip $ROOT/media/
-          fi
-
-# -----------------------------
-# 8. REPACK SYSTEM SAFE
-# -----------------------------
-      - name: Repack
-        run: |
-          set -e
-
-          if [ ! -f "$ROOT/build.prop" ]; then
-            echo "❌ SYSTEM BROKEN"
-            exit 1
-          fi
-
-          sync
-          sleep 2
-          sudo fuser -km mnt || true
           sudo umount -l mnt
 
+          # 4. Repack for Note 3
           img2simg system.img system_sparse.img
-
           python3 img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system
+          
+          # Put everything back in the ZIP
+          cp system.new.dat system.transfer.list rom_workspace/
+          cd rom_workspace && zip -r9 ../KT_OS_FINAL.zip .
 
-          brotli -q 6 system.new.dat -o system.new.dat.br
-
-          rm -f system.img system_sparse.img system.new.dat
-
-# -----------------------------
-# 9. FINAL ZIP
-# -----------------------------
-      - name: Build Final ZIP
-        run: |
-          set -e
-
-          rm -f rom_workspace/system.new.dat*
-          rm -f rom_workspace/system.transfer.list
-
-          cp system.new.dat.br system.transfer.list rom_workspace/
-
-          cd rom_workspace
-          zip -r9 ../KT_OS_FINAL.zip .
-
-# -----------------------------
-# 10. UPLOAD
-# -----------------------------
-      - name: Upload ROM
+      - name: Upload Finished ROM
         uses: actions/upload-artifact@v4
         with:
           name: KT_OS_FINAL
