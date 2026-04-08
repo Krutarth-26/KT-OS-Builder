@@ -1,4 +1,4 @@
-name: KTOS FINAL BUILD (NO UPLOAD METHOD)
+name: KTOS FINAL BUILD (FIXED)
 
 on:
   workflow_dispatch:
@@ -33,25 +33,26 @@ jobs:
           unzip base_rom.zip
 
       # -------------------------
-      # CONVERT SYSTEM IMAGE
+      # CONVERT SYSTEM IMAGE (FIXED)
       # -------------------------
       - name: Convert system
         run: |
           cd rom
 
-          # Install sdat2img
+          # Clone tool
           git clone https://github.com/xpirt/sdat2img.git
-          python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
 
-          # Decompress brotli
+          # Step 1: Decompress FIRST
           brotli --decompress system.new.dat.br -o system.new.dat
 
-          # Convert again after decompression
+          # Step 2: Convert to IMG
           python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
 
+          # Step 3: Mount system
           mkdir system_raw
           sudo mount -o loop system.img system_raw
 
+          # Step 4: Copy system files
           mkdir system
           sudo cp -r system_raw/* system/
 
