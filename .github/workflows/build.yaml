@@ -1,4 +1,4 @@
-name: KT OS FINAL MASTER
+name: KTOS FINAL BUILD (NO UPLOAD METHOD)
 
 on:
   workflow_dispatch:
@@ -6,58 +6,179 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
+      # -------------------------
+      # CHECKOUT
+      # -------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # -------------------------
+      # INSTALL TOOLS
+      # -------------------------
       - name: Install Tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y brotli zip unzip wget python3 e2fsprogs android-sdk-libsparse-utils
-          git clone https://github.com/xpirt/sdat2img.git
-          git clone https://github.com/xpirt/img2sdat.git
-          chmod -R +x sdat2img img2sdat
+          sudo apt update
+          sudo apt install -y unzip zip ffmpeg openjdk-8-jdk brotli python3 e2fsprogs
 
-      - name: Process ROM
+      # -------------------------
+      # DOWNLOAD BASE ROM
+      # -------------------------
+      - name: Download Base ROM
         run: |
-          # 1. Download ROM
-          URL="https://downloads.sourceforge.net/project/ha3g-project/LineageOS-18.1/lineage-18.1-20220412-UNOFFICIAL-ha3g.zip"
-          wget -q $URL -o rom.zip
-          unzip -q rom.zip -d rom_workspace
+          mkdir rom
+          cd rom
+          wget https://downloads.sourceforge.net/project/ajhut/lineage-18.1-20211112-UNOFFICIAL-ha3g.zip -O base_rom.zip
+          unzip base_rom.zip
 
-          # 2. Extract System
-          DAT=$(find rom_workspace -name "system.new.dat.br")
-          LIST=$(find rom_workspace -name "system.transfer.list")
-          brotli -d "$DAT"
-          python3 sdat2img/sdat2img.py "$LIST" "${DAT%.br}" system.img
+      # -------------------------
+      # CONVERT SYSTEM IMAGE
+      # -------------------------
+      - name: Convert system
+        run: |
+          cd rom
 
-          # 3. Mount and Inject MicroG (The KT OS Secret Sauce)
-          mkdir mnt
-          sudo mount -o loop system.img mnt
-          sudo mkdir -p mnt/system/priv-app/KT_MicroG
-          sudo wget -q "https://github.com/microg/GmsCore/releases/latest/download/GmsCore.apk" -O mnt/system/priv-app/KT_MicroG/KT_MicroG.apk
-          sudo chmod 644 mnt/system/priv-app/KT_MicroG/KT_MicroG.apk
-          
-          # Add Permission Whitelist for Spoofing
-          sudo mkdir -p mnt/system/etc/permissions
-          sudo bash -c "cat > mnt/system/etc/permissions/microg.xml <<EOF
-          <permissions>
-              <permission name=\"android.permission.FAKE_PACKAGE_SIGNATURE\" />
-          </permissions>
-          EOF"
+          # Install sdat2img
+          git clone https://github.com/xpirt/sdat2img.git
+          python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
 
-          sudo umount -l mnt
+          # Decompress brotli
+          brotli --decompress system.new.dat.br -o system.new.dat
 
-          # 4. Repack for Note 3
-          img2simg system.img system_sparse.img
-          python3 img2sdat/img2sdat.py system_sparse.img -o . -v 4 -p system
-          
-          # Put everything back in the ZIP
-          cp system.new.dat system.transfer.list rom_workspace/
-          cd rom_workspace && zip -r9 ../KT_OS_FINAL.zip .
+          # Convert again after decompression
+          python3 sdat2img/sdat2img.py system.transfer.list system.new.dat system.img
 
-      - name: Upload Finished ROM
+          mkdir system_raw
+          sudo mount -o loop system.img system_raw
+
+          mkdir system
+          sudo cp -r system_raw/* system/
+
+      # -------------------------
+      # BUILD KT AI APP
+      # -------------------------
+      - name: Build KT App
+        run: |
+          mkdir ktapp
+          cd ktapp
+
+          mkdir -p src/com/kt/search
+
+          cat <<EOF > src/com/kt/search/MainActivity.java
+          package com.kt.search;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.content.Intent;
+          import android.net.Uri;
+
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  try {
+                      Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://lens.google.com"));
+                      startActivity(i);
+                  } catch (Exception e) {}
+                  finish();
+              }
+          }
+          EOF
+
+          cat <<EOF > AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.kt.search">
+              <application android:label="KT Circle Search">
+                  <activity android:name=".MainActivity">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          mkdir build
+          javac -source 1.8 -target 1.8 -d build src/com/kt/search/MainActivity.java
+          jar cvf KTSearch.apk -C build .
+
+      # -------------------------
+      # ADD SYSTEM APPS
+      # -------------------------
+      - name: Inject Apps
+        run: |
+          mkdir -p rom/system/system/priv-app/AuroraStore
+          cp prebuilt/AuroraStore.apk rom/system/system/priv-app/AuroraStore/AuroraStore.apk
+
+          mkdir -p rom/system/system/priv-app/KTSearch
+          cp ktapp/KTSearch.apk rom/system/system/priv-app/KTSearch/KTSearch.apk
+
+      # -------------------------
+      # FIX PERMISSIONS
+      # -------------------------
+      - name: Fix Permissions
+        run: |
+          chmod -R 755 rom/system/system
+
+      # -------------------------
+      # CREATE BOOTANIMATION
+      # -------------------------
+      - name: Create Bootanimation
+        run: |
+          mkdir boot
+          cp prebuilt/kt_boot.mp4 boot/
+          cd boot
+
+          mkdir frames
+          ffmpeg -i kt_boot.mp4 -vf "fps=24,scale=720:1280" frames/frame_%04d.png
+
+          mkdir -p bootanimation/part0
+          cp frames/*.png bootanimation/part0/
+
+          echo "720 1280 24" > bootanimation/desc.txt
+          echo "p 0 0 part0" >> bootanimation/desc.txt
+
+          cd bootanimation
+          zip -r ../../bootanimation.zip .
+
+      # -------------------------
+      # APPLY BOOTANIMATION
+      # -------------------------
+      - name: Apply Bootanimation
+        run: |
+          cp bootanimation.zip rom/system/system/media/bootanimation.zip
+
+      # -------------------------
+      # REPACK SYSTEM
+      # -------------------------
+      - name: Repack System
+        run: |
+          cd rom
+          sudo make_ext4fs -s -l 2147483648 -a system new_system.img system
+
+      # -------------------------
+      # CLEAN OLD FILES
+      # -------------------------
+      - name: Cleanup
+        run: |
+          cd rom
+          rm -f system.new.dat system.new.dat.br system.transfer.list system.img
+
+      # -------------------------
+      # REPACK ROM ZIP
+      # -------------------------
+      - name: Repack ROM
+        run: |
+          cd rom
+          zip -r ../KTOS-FINAL.zip *
+
+      # -------------------------
+      # UPLOAD RESULT
+      # -------------------------
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: KT_OS_FINAL
-          path: KT_OS_FINAL.zip
+          name: KTOS-FINAL
+          path: KTOS-FINAL.zip
